@@ -386,6 +386,17 @@ static Value *literal_pointer_val(jl_codectx_t &ctx, jl_value_t *p)
         return V_null;
     if (!imaging_mode)
         return literal_static_pointer_val(p);
+    if (jl_is_int8(p) || jl_is_uint8(p)) {
+        auto jvar = jl_is_int8(p) ? jlboxed_int8 : jlboxed_uint8;
+        Constant *gv = prepare_global_in(jl_Module, jvar);
+        uint8_t value;
+        memcpy(&value, p, 1);
+        Constant *idx[] = {ConstantInt::get(T_int32, 0),
+                           ConstantInt::get(T_int32, value * 2 + 1)};
+        return ConstantExpr::getBitCast(
+            ConstantExpr::getInBoundsGetElementPtr(jvar->_type(jl_Module->getContext()),
+                                                   gv, idx), T_pjlvalue);
+    }
     Value *pgv = literal_pointer_val_slot(ctx, p);
     return tbaa_decorate(tbaa_const, maybe_mark_load_dereferenceable(
             ctx.builder.CreateAlignedLoad(T_pjlvalue, pgv, sizeof(void*)),
@@ -2186,6 +2197,18 @@ static Value *as_value(jl_codectx_t &ctx, Type *to, const jl_cgval_t &v)
     return emit_unbox(ctx, to, v, v.typ);
 }
 
+static Value *get_i8box(jl_codectx_t &ctx, Value *v, jl_datatype_t *ty)
+{
+    auto jvar = ty == jl_int8_type ? jlboxed_int8 : jlboxed_uint8;
+    Constant *gv = prepare_global_in(jl_Module, jvar);
+    Value *idx1 = ctx.builder.CreateZExt(v, T_int32);
+    idx1 = ctx.builder.CreateMul(idx1, ConstantInt::get(T_int32, 2));
+    idx1 = ctx.builder.CreateAdd(idx1, ConstantInt::get(T_int32, 1));
+    Value *idx[] = {ConstantInt::get(T_int32, 0), idx1};
+    return ctx.builder.CreateBitCast(ctx.builder.CreateInBoundsGEP(gv, idx),
+                                     T_pjlvalue);
+}
+
 // some types have special boxing functions with small-value caches
 // Returns T_prjlvalue
 static Value *_boxed_special(jl_codectx_t &ctx, const jl_cgval_t &vinfo, Type *t)
@@ -2210,7 +2233,7 @@ static Value *_boxed_special(jl_codectx_t &ctx, const jl_cgval_t &vinfo, Type *t
     assert(jl_is_datatype(jb));
     Value *box = NULL;
     if (jb == jl_int8_type)
-        box = track_pjlvalue(ctx, call_with_attrs(ctx, box_int8_func, as_value(ctx, t, vinfo)));
+        box = track_pjlvalue(ctx, get_i8box(ctx, as_value(ctx, t, vinfo), jb));
     else if (jb == jl_int16_type)
         box = call_with_attrs(ctx, box_int16_func, as_value(ctx, t, vinfo));
     else if (jb == jl_int32_type)
@@ -2223,7 +2246,7 @@ static Value *_boxed_special(jl_codectx_t &ctx, const jl_cgval_t &vinfo, Type *t
     //  box = ctx.builder.CreateCall(box_float64_func, as_value(ctx, t, vinfo);
     // for Float64, fall through to generic case below, to inline alloc & init of Float64 box. cheap, I know.
     else if (jb == jl_uint8_type)
-        box = track_pjlvalue(ctx, call_with_attrs(ctx, box_uint8_func, as_value(ctx, t, vinfo)));
+        box = track_pjlvalue(ctx, get_i8box(ctx, as_value(ctx, t, vinfo), jb));
     else if (jb == jl_uint16_type)
         box = call_with_attrs(ctx, box_uint16_func, as_value(ctx, t, vinfo));
     else if (jb == jl_uint32_type)

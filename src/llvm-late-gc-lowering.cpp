@@ -1530,6 +1530,10 @@ State LateLowerGCFrame::LocalScan(Function &F) {
                             RefinedPtr.push_back(-2);
                         }
                     }
+                    else if (isa<Constant>(origin->stripInBoundsOffsets())) {
+                        // Global constant. e.g. int8/uint8 boxes
+                        RefinedPtr.push_back(-2);
+                    }
                     MaybeNoteDef(S, BBS, ASCI, BBS.Safepoints, std::move(RefinedPtr));
                 }
             } else if (auto *AI = dyn_cast<AllocaInst>(&I)) {
